@@ -113,14 +113,18 @@ export async function POST(request: Request) {
         )
       : [];
 
-    await addIncomingFacebookMessages(incomingMessages);
-
-    await setLatestWebhookDebugState({
-      receivedAt: new Date().toISOString(),
-      senderIds,
-      recipientIds,
-      entries: Array.isArray(payload.entry) ? payload.entry.length : 0,
-    });
+    try {
+      await addIncomingFacebookMessages(incomingMessages);
+      await setLatestWebhookDebugState({
+        receivedAt: new Date().toISOString(),
+        senderIds,
+        recipientIds,
+        entries: Array.isArray(payload.entry) ? payload.entry.length : 0,
+      });
+    } catch (error) {
+      // Do not fail webhook delivery when debug state persistence is unavailable.
+      console.error("Failed to persist webhook debug state:", error);
+    }
 
     // TODO: Persist incoming events and dispatch processing jobs.
     console.log("Facebook webhook event received:", {

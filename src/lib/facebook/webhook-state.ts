@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 type WebhookDebugState = {
@@ -36,7 +37,21 @@ const DEFAULT_STATE: PersistedWebhookState = {
   conversations: [],
 };
 
-const STATE_DIR = path.join(process.cwd(), ".data");
+function resolveStateDir() {
+  const configuredDir = process.env.FACEBOOK_WEBHOOK_STATE_DIR?.trim();
+  if (configuredDir) {
+    return configuredDir;
+  }
+
+  // Vercel serverless functions have a read-only code filesystem; use temp storage.
+  if (process.env.VERCEL) {
+    return path.join(os.tmpdir(), "social-inbox");
+  }
+
+  return path.join(process.cwd(), ".data");
+}
+
+const STATE_DIR = resolveStateDir();
 const STATE_PATH = path.join(STATE_DIR, "facebook-webhook-state.json");
 
 let writeQueue: Promise<void> = Promise.resolve();
