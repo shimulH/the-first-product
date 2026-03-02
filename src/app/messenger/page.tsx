@@ -185,7 +185,10 @@ export default function MessengerPage() {
           preview: lastMessage?.text ?? "No text message yet.",
         };
       })
-    : fallbackQueueItems;
+    : fallbackQueueItems.map((item) => ({
+        ...item,
+        status: item.status === "pending" ? "pending" : "open",
+      }));
   const selected = queueItems.find((item) => item.id === selectedEntityId) ?? queueItems[0];
   const selectedProfile = selectedConversation ? profilesByPsid[selectedConversation.psid] : null;
   const selectedProfileName =

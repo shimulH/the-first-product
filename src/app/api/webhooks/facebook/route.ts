@@ -55,9 +55,9 @@ export async function POST(request: Request) {
       message?: { mid?: string; text?: string };
     };
 
-    const senderIds = Array.isArray(payload.entry)
+    const senderIds: string[] = Array.isArray(payload.entry)
       ? [
-          ...new Set(
+          ...new Set<string>(
             payload.entry.flatMap((entry: { messaging?: MessagingEvent[] }) =>
               Array.isArray(entry.messaging)
                 ? entry.messaging
@@ -68,9 +68,9 @@ export async function POST(request: Request) {
           ),
         ]
       : [];
-    const recipientIds = Array.isArray(payload.entry)
+    const recipientIds: string[] = Array.isArray(payload.entry)
       ? [
-          ...new Set(
+          ...new Set<string>(
             payload.entry.flatMap((entry: { messaging?: MessagingEvent[] }) =>
               Array.isArray(entry.messaging)
                 ? entry.messaging
@@ -99,8 +99,8 @@ export async function POST(request: Request) {
                     senderId: string;
                     recipientId: string;
                     text: string;
-                    timestamp?: number;
-                    mid?: string;
+                    timestamp: number | undefined;
+                    mid: string | undefined;
                   } =>
                     typeof event.senderId === "string" &&
                     event.senderId.length > 0 &&
