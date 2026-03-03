@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { db } from "@/lib/db/client";
+import { facebookConversations, facebookMessages, facebookWebhookDebugState } from "@/lib/db/schema";
 
 type WebhookDebugState = {
   receivedAt: string;
@@ -27,127 +27,106 @@ export type ConversationThread = {
 
 const MAX_MESSAGES_PER_THREAD = 50;
 const MAX_THREADS = 100;
-type PersistedWebhookState = {
-  latest: WebhookDebugState | null;
-  conversations: ConversationThread[];
-};
+const DEBUG_STATE_ID = 1;
 
-const DEFAULT_STATE: PersistedWebhookState = {
-  latest: null,
-  conversations: [],
-};
+async function trimStateForThread(threadId: string) {
+  const newestMessageIds = await db
+    .select({ id: facebookMessages.id })
+    .from(facebookMessages)
+    .where(eq(facebookMessages.conversationId, threadId))
+    .orderBy(desc(facebookMessages.timestampMs))
+    .limit(MAX_MESSAGES_PER_THREAD);
 
-function resolveStateDir() {
-  const configuredDir = process.env.FACEBOOK_WEBHOOK_STATE_DIR?.trim();
-  if (configuredDir) {
-    return configuredDir;
-  }
+  const newestIdsSet = new Set(newestMessageIds.map((row) => row.id));
+  const allMessageIds = await db
+    .select({ id: facebookMessages.id })
+    .from(facebookMessages)
+    .where(eq(facebookMessages.conversationId, threadId));
+  const staleIds = allMessageIds.filter((row) => !newestIdsSet.has(row.id)).map((row) => row.id);
 
-  // Vercel serverless functions have a read-only code filesystem; use temp storage.
-  if (process.env.VERCEL) {
-    return path.join(os.tmpdir(), "social-inbox");
-  }
-
-  return path.join(process.cwd(), ".data");
-}
-
-const STATE_DIR = resolveStateDir();
-const STATE_PATH = path.join(STATE_DIR, "facebook-webhook-state.json");
-
-let writeQueue: Promise<void> = Promise.resolve();
-
-async function readState(): Promise<PersistedWebhookState> {
-  try {
-    const content = await readFile(STATE_PATH, "utf8");
-    const parsed = JSON.parse(content) as Partial<PersistedWebhookState>;
-
-    const latest =
-      parsed.latest &&
-      typeof parsed.latest === "object" &&
-      typeof parsed.latest.receivedAt === "string" &&
-      Array.isArray(parsed.latest.senderIds) &&
-      Array.isArray(parsed.latest.recipientIds) &&
-      typeof parsed.latest.entries === "number"
-        ? parsed.latest
-        : null;
-
-    const conversations = Array.isArray(parsed.conversations)
-      ? parsed.conversations
-          .filter(
-            (thread): thread is ConversationThread =>
-              typeof thread?.psid === "string" && Array.isArray(thread?.messages) && typeof thread?.updatedAt === "number",
-          )
-          .map((thread) => ({
-            ...thread,
-            pageId: typeof thread.pageId === "string" ? thread.pageId : null,
-            messages: thread.messages.filter(
-              (message): message is ConversationMessage =>
-                typeof message?.id === "string" &&
-                typeof message?.senderId === "string" &&
-                typeof message?.recipientId === "string" &&
-                typeof message?.text === "string" &&
-                typeof message?.timestamp === "number" &&
-                (message?.direction === "inbound" || message?.direction === "outbound"),
-            ),
-          }))
-      : [];
-
-    return { latest, conversations };
-  } catch {
-    return DEFAULT_STATE;
+  if (staleIds.length) {
+    await db.delete(facebookMessages).where(inArray(facebookMessages.id, staleIds));
   }
 }
 
-async function writeState(state: PersistedWebhookState) {
-  await mkdir(STATE_DIR, { recursive: true });
-  await writeFile(STATE_PATH, JSON.stringify(state), "utf8");
-}
+async function trimThreads() {
+  const keepThreadIds = await db
+    .select({ id: facebookConversations.id })
+    .from(facebookConversations)
+    .orderBy(desc(facebookConversations.updatedAt))
+    .limit(MAX_THREADS);
 
-function enqueueWrite(updater: (state: PersistedWebhookState) => PersistedWebhookState | Promise<PersistedWebhookState>) {
-  writeQueue = writeQueue.then(async () => {
-    const current = await readState();
-    const next = await updater(current);
-    await writeState(next);
-  });
-  return writeQueue;
-}
+  const keepSet = new Set(keepThreadIds.map((row) => row.id));
+  const allThreadIds = await db.select({ id: facebookConversations.id }).from(facebookConversations);
+  const staleThreadIds = allThreadIds.filter((row) => !keepSet.has(row.id)).map((row) => row.id);
 
-function getOrCreateThread(conversations: ConversationThread[], psid: string, pageId: string | null): ConversationThread {
-  const existing = conversations.find((thread) => thread.psid === psid);
-  if (existing) {
-    if (pageId && !existing.pageId) {
-      existing.pageId = pageId;
-    }
-    return existing;
+  if (staleThreadIds.length) {
+    await db.delete(facebookConversations).where(inArray(facebookConversations.id, staleThreadIds));
   }
-
-  const created: ConversationThread = { psid, pageId, updatedAt: Date.now(), messages: [] };
-  conversations.push(created);
-  return created;
 }
 
-function normalizeState(state: PersistedWebhookState): PersistedWebhookState {
-  const conversations = [...state.conversations]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_THREADS)
-    .map((thread) => ({
-      ...thread,
-      messages: [...thread.messages].sort((a, b) => a.timestamp - b.timestamp).slice(-MAX_MESSAGES_PER_THREAD),
-    }));
+async function upsertConversation(input: {
+  psid: string;
+  pageId: string | null;
+  updatedAtMs: number;
+}) {
+  await db
+    .insert(facebookConversations)
+    .values({
+      id: input.psid,
+      psid: input.psid,
+      pageId: input.pageId,
+      updatedAt: new Date(input.updatedAtMs),
+    })
+    .onConflictDoNothing();
 
-  return {
-    latest: state.latest,
-    conversations,
-  };
+  await db
+    .update(facebookConversations)
+    .set({
+      updatedAt: new Date(input.updatedAtMs),
+      ...(input.pageId ? { pageId: input.pageId } : {}),
+    })
+    .where(eq(facebookConversations.id, input.psid));
 }
 
 export async function setLatestWebhookDebugState(state: WebhookDebugState) {
-  await enqueueWrite((current) => normalizeState({ ...current, latest: state }));
+  await db
+    .insert(facebookWebhookDebugState)
+    .values({
+      id: DEBUG_STATE_ID,
+      receivedAt: new Date(state.receivedAt),
+      senderIds: state.senderIds,
+      recipientIds: state.recipientIds,
+      entries: state.entries,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: facebookWebhookDebugState.id,
+      set: {
+        receivedAt: new Date(state.receivedAt),
+        senderIds: state.senderIds,
+        recipientIds: state.recipientIds,
+        entries: state.entries,
+        updatedAt: new Date(),
+      },
+    });
 }
 
 export async function getLatestWebhookDebugState(): Promise<WebhookDebugState | null> {
-  const state = await readState();
-  return state.latest;
+  const row = await db.query.facebookWebhookDebugState.findFirst({
+    where: eq(facebookWebhookDebugState.id, DEBUG_STATE_ID),
+  });
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    receivedAt: row.receivedAt.toISOString(),
+    senderIds: Array.isArray(row.senderIds) ? row.senderIds : [],
+    recipientIds: Array.isArray(row.recipientIds) ? row.recipientIds : [],
+    entries: row.entries,
+  };
 }
 
 export async function addIncomingFacebookMessages(
@@ -163,29 +142,37 @@ export async function addIncomingFacebookMessages(
     return;
   }
 
-  await enqueueWrite((current) => {
-    const next: PersistedWebhookState = {
-      latest: current.latest,
-      conversations: [...current.conversations],
-    };
+  const touchedThreadIds = new Set<string>();
 
-    for (const event of events) {
-      const thread = getOrCreateThread(next.conversations, event.senderId, event.recipientId);
-      const message: ConversationMessage = {
-        id: event.mid ?? `in_${event.senderId}_${event.timestamp ?? Date.now()}`,
+  for (const event of events) {
+    const timestamp = event.timestamp ?? Date.now();
+    const messageId = event.mid ?? `in_${event.senderId}_${timestamp}`;
+
+    await upsertConversation({
+      psid: event.senderId,
+      pageId: event.recipientId,
+      updatedAtMs: timestamp,
+    });
+    touchedThreadIds.add(event.senderId);
+
+    await db
+      .insert(facebookMessages)
+      .values({
+        id: messageId,
+        conversationId: event.senderId,
         senderId: event.senderId,
         recipientId: event.recipientId,
         text: event.text,
-        timestamp: event.timestamp ?? Date.now(),
+        timestampMs: timestamp,
         direction: "inbound",
-      };
+      })
+      .onConflictDoNothing();
+  }
 
-      thread.messages.push(message);
-      thread.updatedAt = message.timestamp;
-    }
-
-    return normalizeState(next);
-  });
+  for (const threadId of touchedThreadIds) {
+    await trimStateForThread(threadId);
+  }
+  await trimThreads();
 }
 
 export async function addOutgoingFacebookMessage(input: {
@@ -194,29 +181,73 @@ export async function addOutgoingFacebookMessage(input: {
   text: string;
   messageId?: string;
 }) {
-  await enqueueWrite((current) => {
-    const now = Date.now();
-    const next: PersistedWebhookState = {
-      latest: current.latest,
-      conversations: [...current.conversations],
-    };
-    const thread = getOrCreateThread(next.conversations, input.recipientId, input.pageId ?? null);
-    const message: ConversationMessage = {
-      id: input.messageId ?? `out_${input.recipientId}_${now}`,
+  const now = Date.now();
+  const messageId = input.messageId ?? `out_${input.recipientId}_${now}`;
+
+  await upsertConversation({
+    psid: input.recipientId,
+    pageId: input.pageId ?? null,
+    updatedAtMs: now,
+  });
+
+  await db
+    .insert(facebookMessages)
+    .values({
+      id: messageId,
+      conversationId: input.recipientId,
       senderId: input.pageId ?? "page",
       recipientId: input.recipientId,
       text: input.text,
-      timestamp: now,
+      timestampMs: now,
       direction: "outbound",
-    };
+    })
+    .onConflictDoNothing();
 
-    thread.messages.push(message);
-    thread.updatedAt = now;
-    return normalizeState(next);
-  });
+  await trimStateForThread(input.recipientId);
+  await trimThreads();
 }
 
 export async function getConversationThreads(): Promise<ConversationThread[]> {
-  const state = await readState();
-  return normalizeState(state).conversations;
+  const conversations = await db
+    .select()
+    .from(facebookConversations)
+    .orderBy(desc(facebookConversations.updatedAt))
+    .limit(MAX_THREADS);
+
+  if (!conversations.length) {
+    return [];
+  }
+
+  const conversationIds = conversations.map((conversation) => conversation.id);
+  const messages = await db
+    .select()
+    .from(facebookMessages)
+    .where(inArray(facebookMessages.conversationId, conversationIds))
+    .orderBy(asc(facebookMessages.timestampMs));
+
+  const messagesByConversationId = new Map<string, ConversationMessage[]>();
+  for (const message of messages) {
+    const current = messagesByConversationId.get(message.conversationId) ?? [];
+    current.push({
+      id: message.id,
+      senderId: message.senderId,
+      recipientId: message.recipientId,
+      text: message.text,
+      timestamp: message.timestampMs,
+      direction: message.direction,
+    });
+    messagesByConversationId.set(message.conversationId, current);
+  }
+
+  return conversations.map((conversation) => {
+    const rawMessages = messagesByConversationId.get(conversation.id) ?? [];
+    const trimmedMessages = rawMessages.slice(-MAX_MESSAGES_PER_THREAD);
+
+    return {
+      psid: conversation.psid,
+      pageId: conversation.pageId,
+      updatedAt: conversation.updatedAt.getTime(),
+      messages: trimmedMessages,
+    };
+  });
 }

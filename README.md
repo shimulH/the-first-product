@@ -20,9 +20,15 @@ Unified inbox MVP for Facebook Messenger and Facebook Page comments.
 
 ## Run locally
 1. Install dependencies:
-   - `npm install`
+   - `pnpm install`
 2. Start development:
-   - `npm run dev`
+   - `pnpm dev`
+
+## Database (Drizzle + Postgres)
+- Set `DATABASE_URL` in your environment.
+- Generate migrations: `pnpm db:generate`
+- Run migrations: `pnpm db:migrate`
+- Open Drizzle Studio: `pnpm db:studio`
 
 ## Facebook webhook (step 4)
 - Endpoint implemented at: `/api/webhooks/facebook`

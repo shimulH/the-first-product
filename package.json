@@ -6,7 +6,11 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@hookform/resolvers": "latest",
@@ -14,8 +18,10 @@
     "class-variance-authority": "latest",
     "clsx": "latest",
     "date-fns": "latest",
+    "drizzle-orm": "^0.45.1",
     "lucide-react": "latest",
     "next": "latest",
+    "pg": "^8.19.0",
     "react": "latest",
     "react-dom": "latest",
     "react-hook-form": "latest",
@@ -27,9 +33,11 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "dotenv": "^17.3.1",
+    "drizzle-kit": "^0.31.9",
     "eslint": "latest",
     "eslint-config-next": "latest",
     "tailwindcss": "latest",
-    "typescript": "latest"
+    "typescript": "5.9.3"
   }
 }
