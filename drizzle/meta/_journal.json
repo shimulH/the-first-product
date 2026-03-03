@@ -15,6 +15,13 @@
       "when": 1772517295547,
       "tag": "0001_brief_exodus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772518734555,
+      "tag": "0002_mighty_venom",
+      "breakpoints": true
     }
   ]
 }

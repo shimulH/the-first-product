@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, index, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 export const facebookConversations = pgTable(
   "facebook_conversations",
@@ -23,7 +23,7 @@ export const facebookMessages = pgTable(
     senderId: text("sender_id").notNull(),
     recipientId: text("recipient_id").notNull(),
     text: text("text").notNull(),
-    timestampMs: integer("timestamp_ms").notNull(),
+    timestampMs: bigint("timestamp_ms", { mode: "number" }).notNull(),
     direction: text("direction", { enum: ["inbound", "outbound"] }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

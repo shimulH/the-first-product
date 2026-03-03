@@ -1,0 +1,1 @@
+ALTER TABLE "facebook_messages" ALTER COLUMN "timestamp_ms" SET DATA TYPE bigint;

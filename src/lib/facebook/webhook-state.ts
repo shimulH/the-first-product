@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { facebookConversations, facebookMessages, facebookWebhookDebugState } from "@/lib/db/schema";
 
