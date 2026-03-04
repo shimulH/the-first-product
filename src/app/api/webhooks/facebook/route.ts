@@ -52,7 +52,19 @@ export async function POST(request: Request) {
       timestamp?: number;
       sender?: { id?: string };
       recipient?: { id?: string };
-      message?: { mid?: string; text?: string };
+      message?: { mid?: string; text?: string; attachments?: unknown[] };
+    };
+    type MessagingDebugEvent = {
+      entryIndex: number;
+      messageIndex: number;
+      mid: string | null;
+      senderId: string | null;
+      recipientId: string | null;
+      textPreview: string | null;
+      hasAttachments: boolean;
+      timestamp: number | null;
+      status: "stored" | "skipped";
+      skipReason: string | null;
     };
 
     const senderIds: string[] = Array.isArray(payload.entry)
@@ -81,37 +93,50 @@ export async function POST(request: Request) {
           ),
         ]
       : [];
-    const incomingMessages = Array.isArray(payload.entry)
-      ? payload.entry.flatMap((entry: { messaging?: MessagingEvent[] }) =>
+    const messagingDebug: MessagingDebugEvent[] = Array.isArray(payload.entry)
+      ? payload.entry.flatMap((entry: { messaging?: MessagingEvent[] }, entryIndex: number) =>
           Array.isArray(entry.messaging)
-            ? entry.messaging
-                .map((event) => ({
-                  senderId: event.sender?.id,
-                  recipientId: event.recipient?.id,
-                  text: event.message?.text,
-                  timestamp: event.timestamp,
-                  mid: event.message?.mid,
-                }))
-                .filter(
-                  (
-                    event,
-                  ): event is {
-                    senderId: string;
-                    recipientId: string;
-                    text: string;
-                    timestamp: number | undefined;
-                    mid: string | undefined;
-                  } =>
-                    typeof event.senderId === "string" &&
-                    event.senderId.length > 0 &&
-                    typeof event.recipientId === "string" &&
-                    event.recipientId.length > 0 &&
-                    typeof event.text === "string" &&
-                    event.text.length > 0,
-                )
+            ? entry.messaging.map((event, messageIndex) => {
+                const senderId = event.sender?.id;
+                const recipientId = event.recipient?.id;
+                const text = event.message?.text;
+                const hasAttachments = Array.isArray(event.message?.attachments) && event.message.attachments.length > 0;
+
+                let skipReason: string | null = null;
+                if (typeof senderId !== "string" || senderId.length === 0) {
+                  skipReason = "missing_sender_id";
+                } else if (typeof recipientId !== "string" || recipientId.length === 0) {
+                  skipReason = "missing_recipient_id";
+                } else if (typeof text !== "string" || text.length === 0) {
+                  skipReason = hasAttachments ? "attachment_only_message" : "missing_or_empty_text";
+                }
+
+                return {
+                  entryIndex,
+                  messageIndex,
+                  mid: event.message?.mid ?? null,
+                  senderId: typeof senderId === "string" ? senderId : null,
+                  recipientId: typeof recipientId === "string" ? recipientId : null,
+                  textPreview: typeof text === "string" ? text.slice(0, 80) : null,
+                  hasAttachments,
+                  timestamp: event.timestamp ?? null,
+                  status: skipReason ? "skipped" : "stored",
+                  skipReason,
+                };
+              })
             : [],
         )
       : [];
+
+    const incomingMessages = messagingDebug
+      .filter((event) => event.status === "stored" && event.senderId && event.recipientId && event.textPreview)
+      .map((event) => ({
+        senderId: event.senderId as string,
+        recipientId: event.recipientId as string,
+        text: event.textPreview as string,
+        timestamp: event.timestamp ?? undefined,
+        mid: event.mid ?? undefined,
+      }));
 
     try {
       await addIncomingFacebookMessages(incomingMessages);
@@ -132,6 +157,12 @@ export async function POST(request: Request) {
       senderIds,
       recipientIds,
       incomingMessages: incomingMessages.length,
+    });
+    console.log("Facebook webhook event debug:", {
+      totalMessagingEvents: messagingDebug.length,
+      storedEvents: messagingDebug.filter((event) => event.status === "stored").length,
+      skippedEvents: messagingDebug.filter((event) => event.status === "skipped").length,
+      events: messagingDebug,
     });
 
     // Facebook requires a 200 response quickly for delivery success.
